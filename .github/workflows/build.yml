@@ -18,12 +18,16 @@ jobs:
       with:
         dotnet-version: '8.0.x'
 
-    - name: Download InfoPanel Plugin SDK
+    - name: Build InfoPanel SDK
       run: |
-        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/habibrehmansg/infopanel/main/InfoPanel.Plugins/InfoPanel.Plugins.csproj" -OutFile "SDK.csproj"
-        dotnet build SDK.csproj -c Release -o ./lib
+        git clone https://github.com/habibrehmansg/infopanel.git infopanel_repo
+        dotnet build infopanel_repo/InfoPanel.Plugins/InfoPanel.Plugins.csproj -c Release -o ./lib
 
-    - name: Restore and Build Plugin
+    - name: Restore NuGet Packages
+      run: |
+        dotnet restore InfoPanel.SystemHardwareIdentifiers.csproj
+
+    - name: Build Plugin
       run: |
         dotnet publish InfoPanel.SystemHardwareIdentifiers.csproj -c Release -o ./staging/InfoPanel.SystemHardwareIdentifiers
 
@@ -40,11 +44,3 @@ jobs:
       with:
         name: InfoPanel.SystemHardwareIdentifiers-ZIP
         path: InfoPanel.SystemHardwareIdentifiers.zip
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
-      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-      with:
-        files: InfoPanel.SystemHardwareIdentifiers.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
