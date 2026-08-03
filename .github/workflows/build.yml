@@ -1,0 +1,50 @@
+name: Build InfoPanel Plugin
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Setup .NET 8
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '8.0.x'
+
+    - name: Download InfoPanel Plugin SDK
+      run: |
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/habibrehmansg/infopanel/main/InfoPanel.Plugins/InfoPanel.Plugins.csproj" -OutFile "SDK.csproj"
+        dotnet build SDK.csproj -c Release -o ./lib
+
+    - name: Restore and Build Plugin
+      run: |
+        dotnet publish InfoPanel.SystemHardwareIdentifiers.csproj -c Release -o ./staging/InfoPanel.SystemHardwareIdentifiers
+
+    - name: Include Plugin Metadata
+      run: |
+        Copy-Item -Path "PluginInfo.ini" -Destination "./staging/InfoPanel.SystemHardwareIdentifiers/"
+
+    - name: Package ZIP
+      run: |
+        Compress-Archive -Path "./staging/InfoPanel.SystemHardwareIdentifiers" -DestinationPath "InfoPanel.SystemHardwareIdentifiers.zip"
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: InfoPanel.SystemHardwareIdentifiers-ZIP
+        path: InfoPanel.SystemHardwareIdentifiers.zip
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      with:
+        files: InfoPanel.SystemHardwareIdentifiers.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
