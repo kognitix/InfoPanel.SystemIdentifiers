@@ -7,6 +7,7 @@ using System.Management;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -61,6 +62,66 @@ namespace InfoPanel.SystemHardwareIdentifiers
         private readonly PluginText _btHeadset = new("peripheral_bt_headset", "Bluetooth Headset", "Detecting...");
         private readonly PluginText _aioCooler = new("cooler_aio", "AIO Liquid Cooler", "Detecting...");
         private readonly PluginText _ledController = new("led_controller", "LED Controller", "Detecting...");
+
+        #region User32 Interop Structs
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct DISPLAY_DEVICE
+        {
+            public int cb;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string DeviceName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceString;
+            public uint StateFlags;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceID;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)]
+            public string DeviceKey;
+        }
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+        private struct DEVMODE
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmDeviceName;
+            public ushort dmSpecVersion;
+            public ushort dmDriverVersion;
+            public ushort dmSize;
+            public ushort dmDriverExtra;
+            public uint dmFields;
+            public int dmPositionX;
+            public int dmPositionY;
+            public uint dmDisplayOrientation;
+            public uint dmDisplayFixedOutput;
+            public short dmColor;
+            public short dmDuplex;
+            public short dmYResolution;
+            public short dmTTOption;
+            public short dmCollate;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
+            public string dmFormName;
+            public ushort dmLogPixels;
+            public uint dmBitsPerPel;
+            public uint dmPelsWidth;
+            public uint dmPelsHeight;
+            public uint dmDisplayFlags;
+            public uint dmDisplayFrequency;
+            public uint dmICMMethod;
+            public uint dmICMIntent;
+            public uint dmMediaType;
+            public uint dmDCoDitherType;
+            public uint dmReserved1;
+            public uint dmReserved2;
+            public uint dmPanningWidth;
+            public uint dmPanningHeight;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto)]
+        private static extern bool EnumDisplaySettings(string? lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+        #endregion
 
         public HardwareIdentifiersPlugin() 
             : base("system-hardware-identifiers", "System Hardware Identifiers", "Exposes detailed hardware identifiers for InfoPanel.")
@@ -178,23 +239,62 @@ namespace InfoPanel.SystemHardwareIdentifiers
         {
             try
             {
-                using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
+                using var searcher = new ManagementObjectSearcher("SELECT Name, PNPDeviceID FROM Win32_VideoController");
                 foreach (var obj in searcher.Get())
                 {
                     string name = obj["Name"]?.ToString()?.Trim() ?? "";
+                    string pnpId = obj["PNPDeviceID"]?.ToString()?.Trim() ?? "";
+
                     if (string.IsNullOrWhiteSpace(name) || name.Contains("Basic Display", StringComparison.OrdinalIgnoreCase)) 
                         continue;
 
                     _gpuModel.Value = name;
-                    _gpuPartner.Value = name;
                     _gpuMemType.Value = name.Contains("4070") ? "GDDR6X" : "GDDR6";
                     _gpuPcieVer.Value = "PCIe 4.0";
                     _gpuPcieLanes.Value = "x16";
                     _gpuPcieLink.Value = "PCIe 4.0 x16";
+
+                    _gpuPartner.Value = GetGpuPartnerFromPnp(pnpId, name);
                     break;
                 }
             }
             catch { }
+        }
+
+        private string GetGpuPartnerFromPnp(string pnpId, string defaultName)
+        {
+            if (string.IsNullOrWhiteSpace(pnpId)) return "NVIDIA";
+
+            var match = Regex.Match(pnpId, @"SUBSYS_([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})", RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                string subVendor = match.Groups[2].Value.ToUpperInvariant();
+                return subVendor switch
+                {
+                    "1043" => "ASUS",
+                    "1462" => "MSI",
+                    "1458" => "Gigabyte",
+                    "10DE" => "NVIDIA (Founders Edition)",
+                    "19DA" => "Zotac",
+                    "1849" => "ASRock",
+                    "1968" or "3842" => "EVGA",
+                    "174B" => "Sapphire",
+                    "148C" => "PowerColor",
+                    "10B0" => "Gainward",
+                    "1569" => "Palit",
+                    "1B0A" => "PNY",
+                    "1E0B" => "Inno3D",
+                    "1028" => "Dell",
+                    "103C" => "HP",
+                    _ => "NVIDIA"
+                };
+            }
+
+            if (defaultName.Contains("ASUS", StringComparison.OrdinalIgnoreCase)) return "ASUS";
+            if (defaultName.Contains("MSI", StringComparison.OrdinalIgnoreCase)) return "MSI";
+            if (defaultName.Contains("Gigabyte", StringComparison.OrdinalIgnoreCase)) return "Gigabyte";
+
+            return "NVIDIA";
         }
 
         private void FetchStorageInfo()
@@ -254,46 +354,99 @@ namespace InfoPanel.SystemHardwareIdentifiers
         {
             try
             {
-                int resWidth = 0, resHeight = 0, refresh = 0;
-                using (var searcher = new ManagementObjectSearcher("SELECT CurrentHorizontalResolution, CurrentVerticalResolution, CurrentRefreshRate FROM Win32_VideoController"))
+                var wmiMonitors = GetWmiMonitors();
+                uint devNum = 0;
+                int activeSlot = 0;
+
+                DISPLAY_DEVICE adapter = new DISPLAY_DEVICE { cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE)) };
+
+                while (EnumDisplayDevices(null, devNum, ref adapter, 0) && activeSlot < 4)
                 {
-                    foreach (var obj in searcher.Get())
+                    devNum++;
+
+                    // Active desktop flag = 0x1
+                    if ((adapter.StateFlags & 0x1) == 0) continue;
+
+                    // Resolution & Refresh Rate for THIS specific monitor
+                    DEVMODE devMode = new DEVMODE { dmSize = (ushort)Marshal.SizeOf(typeof(DEVMODE)) };
+                    if (EnumDisplaySettings(adapter.DeviceName, -1, ref devMode))
                     {
-                        if (obj["CurrentHorizontalResolution"] != null)
+                        _monRes[activeSlot].Value = $"{devMode.dmPelsWidth}x{devMode.dmPelsHeight}";
+                        _monRefresh[activeSlot].Value = $"{devMode.dmDisplayFrequency} Hz";
+                    }
+
+                    // Monitor hardware details connected to this display adapter
+                    DISPLAY_DEVICE monDevice = new DISPLAY_DEVICE { cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE)) };
+                    if (EnumDisplayDevices(adapter.DeviceName, 0, ref monDevice, 0))
+                    {
+                        string monPnpId = monDevice.DeviceID;
+
+                        var matchedWmi = wmiMonitors.FirstOrDefault(w => 
+                            !string.IsNullOrEmpty(w.PnpIdSnippet) && monPnpId.Contains(w.PnpIdSnippet, StringComparison.OrdinalIgnoreCase));
+
+                        if (!string.IsNullOrEmpty(matchedWmi.Model))
                         {
-                            resWidth = Convert.ToInt32(obj["CurrentHorizontalResolution"]);
-                            resHeight = Convert.ToInt32(obj["CurrentVerticalResolution"]);
-                            refresh = Convert.ToInt32(obj["CurrentRefreshRate"]);
-                            break;
+                            _monModels[activeSlot].Value = matchedWmi.Model;
+                        }
+                        else if (wmiMonitors.Count > activeSlot)
+                        {
+                            _monModels[activeSlot].Value = wmiMonitors[activeSlot].Model;
+                        }
+                        else
+                        {
+                            _monModels[activeSlot].Value = !string.IsNullOrWhiteSpace(monDevice.DeviceString) ? monDevice.DeviceString : "Generic Monitor";
                         }
                     }
+
+                    activeSlot++;
                 }
 
-                int monIndex = 0;
-                using (var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT UserFriendlyName FROM WmiMonitorID"))
+                // Fill inactive slots
+                for (int i = activeSlot; i < 4; i++)
                 {
-                    foreach (var obj in searcher.Get())
+                    _monModels[i].Value = "Not Connected";
+                    _monRes[i].Value = "N/A";
+                    _monRefresh[i].Value = "N/A";
+                }
+            }
+            catch { }
+        }
+
+        private struct WmiMonData
+        {
+            public string PnpIdSnippet;
+            public string Model;
+        }
+
+        private List<WmiMonData> GetWmiMonitors()
+        {
+            var list = new List<WmiMonData>();
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT InstanceName, UserFriendlyName FROM WmiMonitorID");
+                foreach (var obj in searcher.Get())
+                {
+                    string inst = obj["InstanceName"]?.ToString() ?? "";
+                    var modelArr = obj["UserFriendlyName"] as ushort[];
+
+                    string modelName = modelArr != null ? Encoding.ASCII.GetString(modelArr.Select(c => (byte)c).ToArray()).Trim('\0', ' ') : "";
+
+                    string snippet = "";
+                    var parts = inst.Split('\\');
+                    if (parts.Length > 1) snippet = parts[1];
+
+                    if (!string.IsNullOrWhiteSpace(modelName))
                     {
-                        if (monIndex >= 4) break;
-                        var nameArray = obj["UserFriendlyName"] as ushort[];
-                        if (nameArray != null)
+                        list.Add(new WmiMonData
                         {
-                            string name = Encoding.ASCII.GetString(nameArray.Select(c => (byte)c).ToArray()).Trim('\0', ' ');
-                            if (!string.IsNullOrWhiteSpace(name))
-                            {
-                                _monModels[monIndex].Value = name;
-                                if (resWidth > 0 && resHeight > 0)
-                                {
-                                    _monRes[monIndex].Value = $"{resWidth}x{resHeight}";
-                                    _monRefresh[monIndex].Value = $"{refresh} Hz";
-                                }
-                                monIndex++;
-                            }
-                        }
+                            PnpIdSnippet = snippet,
+                            Model = modelName
+                        });
                     }
                 }
             }
             catch { }
+            return list;
         }
 
         private void FetchPeripheralsInfo()
@@ -328,15 +481,28 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         _mouse.Value = pnpName;
                     }
 
-                    // Gamepad
-                    if (!foundGamepad && (pnpClass.Equals("XnaComposite", StringComparison.OrdinalIgnoreCase) || 
-                                          pnpClass.Equals("XboxPeripheral", StringComparison.OrdinalIgnoreCase) ||
-                                          pnpName.Contains("Xbox", StringComparison.OrdinalIgnoreCase) || 
-                                          pnpName.Contains("Controller", StringComparison.OrdinalIgnoreCase) || 
-                                          pnpName.Contains("Gamepad", StringComparison.OrdinalIgnoreCase) ||
-                                          pnpName.Contains("Raikiri", StringComparison.OrdinalIgnoreCase)))
+                    // Gamepad (strict filter excluding Host Controllers and Intel drivers)
+                    if (!foundGamepad)
                     {
-                        if (!pnpName.Contains("Root") && !pnpName.Contains("Virtual"))
+                        bool isGamepadClass = pnpClass.Equals("XnaComposite", StringComparison.OrdinalIgnoreCase) || 
+                                              pnpClass.Equals("XboxPeripheral", StringComparison.OrdinalIgnoreCase);
+
+                        bool isGamepadName = pnpName.Contains("Xbox 360", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("Xbox One", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("Xbox Wireless", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("Raikiri", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("Gamepad", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("DualSense", StringComparison.OrdinalIgnoreCase) ||
+                                             pnpName.Contains("DualShock", StringComparison.OrdinalIgnoreCase);
+
+                        bool isHostController = pnpName.Contains("Host Controller", StringComparison.OrdinalIgnoreCase) ||
+                                                pnpName.Contains("Serial IO", StringComparison.OrdinalIgnoreCase) ||
+                                                pnpName.Contains("PCI", StringComparison.OrdinalIgnoreCase) ||
+                                                pnpName.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
+                                                pnpName.Contains("Root", StringComparison.OrdinalIgnoreCase) ||
+                                                pnpName.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
+
+                        if ((isGamepadClass || isGamepadName) && !isHostController)
                         {
                             _gamepad.Value = pnpName;
                             foundGamepad = true;
@@ -364,14 +530,15 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         foundLed = true;
                     }
 
-                    // Bluetooth Headset / Media
+                    // Bluetooth Headset
                     if (!foundBtHeadset && (pnpName.Contains("Bose", StringComparison.OrdinalIgnoreCase) || 
                                             pnpName.Contains("QC45", StringComparison.OrdinalIgnoreCase) || 
                                             pnpName.Contains("Headphones", StringComparison.OrdinalIgnoreCase)))
                     {
                         if (!pnpName.Contains("Hands-Free AG", StringComparison.OrdinalIgnoreCase))
                         {
-                            _btHeadset.Value = pnpName;
+                            string cleanBt = Regex.Replace(pnpName, @"\s+(Avrcp Transport|Hands-Free AG|Hands-Free|Bluetooth Audio Device)", "", RegexOptions.IgnoreCase).Trim();
+                            _btHeadset.Value = cleanBt;
                             foundBtHeadset = true;
                         }
                     }
@@ -413,7 +580,15 @@ namespace InfoPanel.SystemHardwareIdentifiers
                             using RegistryKey? propsKey = deviceKey.OpenSubKey("Properties");
                             if (propsKey != null)
                             {
-                                string? deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2")?.ToString();
+                                // Priority 1: Interface Friendly Name (e.g. "Antlion Wireless Microphone")
+                                string? deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},14")?.ToString();
+                                
+                                // Priority 2: Device Description fallback
+                                if (string.IsNullOrWhiteSpace(deviceName))
+                                {
+                                    deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2")?.ToString();
+                                }
+
                                 if (!string.IsNullOrEmpty(deviceName))
                                 {
                                     return deviceName;
