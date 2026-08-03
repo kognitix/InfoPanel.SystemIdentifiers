@@ -25,22 +25,22 @@ jobs:
 
     - name: Restore NuGet Packages
       run: |
-        dotnet restore InfoPanel.SystemHardwareIdentifiers.csproj
+        dotnet restore InfoPanel.SystemIdentifiers.csproj
 
     - name: Build Plugin
       run: |
-        dotnet publish InfoPanel.SystemHardwareIdentifiers.csproj -c Release -o ./staging/InfoPanel.SystemHardwareIdentifiers
+        dotnet publish InfoPanel.SystemIdentifiers.csproj -c Release -o ./staging/InfoPanel.SystemIdentifiers
 
     - name: Include Plugin Metadata
       run: |
-        Copy-Item -Path "PluginInfo.ini" -Destination "./staging/InfoPanel.SystemHardwareIdentifiers/"
+        Copy-Item -Path "PluginInfo.ini" -Destination "./staging/InfoPanel.SystemIdentifiers/"
 
     - name: Package ZIP
       run: |
-        Compress-Archive -Path "./staging/InfoPanel.SystemHardwareIdentifiers" -DestinationPath "InfoPanel.SystemHardwareIdentifiers.zip"
+        Compress-Archive -Path "./staging/InfoPanel.SystemIdentifiers" -DestinationPath "InfoPanel.SystemIdentifiers.zip"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: InfoPanel.SystemHardwareIdentifiers-ZIP
-        path: InfoPanel.SystemHardwareIdentifiers.zip
+        name: InfoPanel.SystemIdentifiers-ZIP
+        path: InfoPanel.SystemIdentifiers.zip
