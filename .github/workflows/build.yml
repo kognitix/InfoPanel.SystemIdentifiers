@@ -20,8 +20,8 @@ jobs:
 
     - name: Build InfoPanel SDK
       run: |
-        git clone https://github.com/habibrehmansg/infopanel.git infopanel_repo
-        dotnet build infopanel_repo/InfoPanel.Plugins/InfoPanel.Plugins.csproj -c Release -o ./lib
+        git clone https://github.com/habibrehmansg/infopanel.git ../infopanel_repo
+        dotnet build ../infopanel_repo/InfoPanel.Plugins/InfoPanel.Plugins.csproj -c Release -o ./lib
 
     - name: Restore NuGet Packages
       run: |
