@@ -133,7 +133,7 @@ namespace InfoPanel.SystemIdentifiers
         #endregion
 
         public HardwareIdentifiersPlugin() 
-            : base("system-identifiers", "InfoPanel System Identifiers", "Exposes detailed system hardware and software identifiers.")
+            : base("system-identifiers", "System Identifiers", "Exposes detailed system hardware and software identifiers.")
         {
         }
 
