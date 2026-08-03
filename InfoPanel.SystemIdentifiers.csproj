@@ -21,7 +21,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\InfoPanel.SDK\InfoPanel.SDK.csproj" />
+    <Reference Include="InfoPanel.Plugins">
+      <HintPath>lib\InfoPanel.Plugins.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>
