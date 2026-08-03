@@ -6,6 +6,7 @@ using System.Management;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -120,7 +121,9 @@ namespace InfoPanel.SystemHardwareIdentifiers
             FetchGpuInfo();
             FetchStorageInfo();
             FetchRamInfo();
+            FetchMonitorsInfo();
             FetchNetworkInfo();
+            FetchPeripheralsInfo();
             FetchPublicIp();
         }
 
@@ -173,13 +176,16 @@ namespace InfoPanel.SystemHardwareIdentifiers
         {
             try
             {
-                using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController WHERE Name NOT LIKE '%Basic%'");
+                using var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_VideoController");
                 foreach (var obj in searcher.Get())
                 {
-                    string name = obj["Name"]?.ToString()?.Trim() ?? "Unknown GPU";
+                    string name = obj["Name"]?.ToString()?.Trim() ?? "";
+                    if (string.IsNullOrWhiteSpace(name) || name.Contains("Basic Display", StringComparison.OrdinalIgnoreCase)) 
+                        continue;
+
                     _gpuModel.Value = name;
                     _gpuPartner.Value = name;
-                    _gpuMemType.Value = "GDDR6X";
+                    _gpuMemType.Value = name.Contains("4070") ? "GDDR6X" : "GDDR6";
                     _gpuPcieVer.Value = "PCIe 4.0";
                     _gpuPcieLanes.Value = "x16";
                     _gpuPcieLink.Value = "PCIe 4.0 x16";
@@ -216,14 +222,152 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 foreach (var obj in searcher.Get())
                 {
                     if (index >= 4) break;
-                    string mfg = obj["Manufacturer"]?.ToString()?.Trim() ?? "RAM";
+                    string mfg = obj["Manufacturer"]?.ToString()?.Trim() ?? "";
                     ulong bytes = Convert.ToUInt64(obj["Capacity"] ?? 0);
                     uint speed = Convert.ToUInt32(obj["Speed"] ?? 0);
                     uint gb = (uint)(bytes / (1024 * 1024 * 1024));
 
-                    _ramBrands[index].Value = mfg;
+                    _ramBrands[index].Value = CleanRamManufacturer(mfg);
                     _ramDetails[index].Value = $"{gb} GB DDR5-{speed}";
                     index++;
+                }
+            }
+            catch { }
+        }
+
+        private string CleanRamManufacturer(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return "Unknown";
+            if (raw.Contains("G Skill", StringComparison.OrdinalIgnoreCase) || raw.Contains("G.Skill", StringComparison.OrdinalIgnoreCase)) return "G.SKILL";
+            if (raw.Contains("Corsair", StringComparison.OrdinalIgnoreCase)) return "Corsair";
+            if (raw.Contains("Kingston", StringComparison.OrdinalIgnoreCase)) return "Kingston";
+            if (raw.Contains("Crucial", StringComparison.OrdinalIgnoreCase) || raw.Contains("Micron", StringComparison.OrdinalIgnoreCase)) return "Crucial";
+            if (raw.Contains("Team", StringComparison.OrdinalIgnoreCase)) return "TeamGroup";
+            if (raw.Contains("Samsung", StringComparison.OrdinalIgnoreCase)) return "Samsung";
+            if (raw.Contains("Hynix", StringComparison.OrdinalIgnoreCase)) return "SK Hynix";
+            return raw.Trim();
+        }
+
+        private void FetchMonitorsInfo()
+        {
+            try
+            {
+                int resWidth = 0, resHeight = 0, refresh = 0;
+                using (var searcher = new ManagementObjectSearcher("SELECT CurrentHorizontalResolution, CurrentVerticalResolution, CurrentRefreshRate FROM Win32_VideoController"))
+                {
+                    foreach (var obj in searcher.Get())
+                    {
+                        if (obj["CurrentHorizontalResolution"] != null)
+                        {
+                            resWidth = Convert.ToInt32(obj["CurrentHorizontalResolution"]);
+                            resHeight = Convert.ToInt32(obj["CurrentVerticalResolution"]);
+                            refresh = Convert.ToInt32(obj["CurrentRefreshRate"]);
+                            break;
+                        }
+                    }
+                }
+
+                int monIndex = 0;
+                using (var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT UserFriendlyName FROM WmiMonitorID"))
+                {
+                    foreach (var obj in searcher.Get())
+                    {
+                        if (monIndex >= 4) break;
+                        var nameArray = obj["UserFriendlyName"] as ushort[];
+                        if (nameArray != null)
+                        {
+                            string name = Encoding.ASCII.GetString(nameArray.Select(c => (byte)c).ToArray()).Trim('\0', ' ');
+                            if (!string.IsNullOrWhiteSpace(name))
+                            {
+                                _monModels[monIndex].Value = name;
+                                if (resWidth > 0 && resHeight > 0)
+                                {
+                                    _monRes[monIndex].Value = $"{resWidth}x{resHeight}";
+                                    _monRefresh[monIndex].Value = $"{refresh} Hz";
+                                }
+                                monIndex++;
+                            }
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        private void FetchPeripheralsInfo()
+        {
+            try
+            {
+                using (var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_Keyboard"))
+                {
+                    foreach (var obj in searcher.Get())
+                    {
+                        string name = obj["Name"]?.ToString()?.Trim() ?? "";
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            _keyboard.Value = name;
+                            break;
+                        }
+                    }
+                }
+
+                using (var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_PointingDevice"))
+                {
+                    foreach (var obj in searcher.Get())
+                    {
+                        string name = obj["Name"]?.ToString()?.Trim() ?? "";
+                        if (!string.IsNullOrWhiteSpace(name))
+                        {
+                            _mouse.Value = name;
+                            break;
+                        }
+                    }
+                }
+
+                using (var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_SoundDevice"))
+                {
+                    foreach (var obj in searcher.Get())
+                    {
+                        string name = obj["Name"]?.ToString()?.Trim() ?? "";
+                        if (!string.IsNullOrWhiteSpace(name) && !name.Contains("Virtual", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _audioOut.Value = name;
+                            break;
+                        }
+                    }
+                }
+
+                using (var searcher = new ManagementObjectSearcher("SELECT Name FROM Win32_PNPEntity WHERE Present = TRUE"))
+                {
+                    bool foundGamepad = false;
+                    bool foundAio = false;
+
+                    foreach (var obj in searcher.Get())
+                    {
+                        string pnpName = obj["Name"]?.ToString() ?? "";
+
+                        if (!foundGamepad && (pnpName.Contains("Xbox", StringComparison.OrdinalIgnoreCase) || 
+                                              pnpName.Contains("Controller", StringComparison.OrdinalIgnoreCase) || 
+                                              pnpName.Contains("Gamepad", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _gamepad.Value = pnpName;
+                            foundGamepad = true;
+                        }
+
+                        if (!foundAio && (pnpName.Contains("Kraken", StringComparison.OrdinalIgnoreCase) || 
+                                          pnpName.Contains("iCUE", StringComparison.OrdinalIgnoreCase) || 
+                                          pnpName.Contains("Commander", StringComparison.OrdinalIgnoreCase) || 
+                                          pnpName.Contains("Liquid", StringComparison.OrdinalIgnoreCase) || 
+                                          pnpName.Contains("Cooler", StringComparison.OrdinalIgnoreCase) || 
+                                          pnpName.Contains("Lian Li", StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _aioCooler.Value = pnpName;
+                            foundAio = true;
+                        }
+                    }
+
+                    if (!foundGamepad) _gamepad.Value = "None Connected";
+                    if (!foundAio) _aioCooler.Value = "Standard Air / Direct Motherboard";
                 }
             }
             catch { }
