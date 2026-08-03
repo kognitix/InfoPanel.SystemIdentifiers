@@ -16,12 +16,11 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace InfoPanel.SystemHardwareIdentifiers
+namespace InfoPanel.SystemIdentifiers
 {
     public class HardwareIdentifiersPlugin : BasePlugin
     {
         // --- HARDWARE IDENTIFIERS ---
-        // Core Hardware
         private readonly PluginText _cpuModel = new("cpu_model", "CPU Model", "Detecting...");
         private readonly PluginText _cpuCodename = new("cpu_codename", "CPU Codename", "Detecting...");
         private readonly PluginText _cpuSocket = new("cpu_socket", "CPU Socket", "Detecting...");
@@ -62,10 +61,16 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         // --- SOFTWARE IDENTIFIERS ---
         private readonly PluginText _winVersion = new("win_version", "Windows Version", "Detecting...");
+        private readonly PluginText _powerPlan = new("power_plan", "Power Plan", "Detecting...");
+        private readonly PluginText _winSecurity = new("win_security", "Windows Security", "Detecting...");
+        private readonly PluginText _winUpdateStatus = new("win_update_status", "Windows Update Status", "Detecting...");
+        private readonly PluginText _directxVersion = new("directx_version", "DirectX Version", "Detecting...");
+        private readonly PluginText _dotnetVersion = new("dotnet_version", ".NET Runtime Version", "Detecting...");
+        private readonly PluginText _gpuDriverVersion = new("gpu_driver_version", "GPU Driver Version", "Detecting...");
         private readonly PluginText _infoPanelVersion = new("infopanel_version", "InfoPanel Version", "Detecting...");
         private readonly PluginText _hwinfoVersion = new("hwinfo_version", "HWiNFO Version", "Detecting...");
         private readonly PluginText _processLassoVersion = new("process_lasso_version", "Process Lasso Version", "Detecting...");
-        private readonly PluginText _nvidiaDriverVersion = new("nvidia_driver_version", "NVIDIA Driver Version", "Detecting...");
+        private readonly PluginText _activeApps = new("active_apps", "Active Gaming & Utilities", "Detecting...");
 
         #region User32 Interop Structs
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -128,7 +133,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
         #endregion
 
         public HardwareIdentifiersPlugin() 
-            : base("system-hardware-identifiers", "System Identifiers", "Exposes detailed system hardware and software identifiers.")
+            : base("system-identifiers", "InfoPanel System Identifiers", "Exposes detailed system hardware and software identifiers.")
         {
         }
 
@@ -171,7 +176,11 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
             // Container 2: Software Identifiers
             var swContainer = new PluginContainer("sys_software_identifiers", "Software Identifiers");
-            swContainer.Entries.AddRange(new[] { _winVersion, _infoPanelVersion, _hwinfoVersion, _processLassoVersion, _nvidiaDriverVersion });
+            swContainer.Entries.AddRange(new[] { 
+                _winVersion, _powerPlan, _winSecurity, _winUpdateStatus, 
+                _directxVersion, _dotnetVersion, _gpuDriverVersion, 
+                _infoPanelVersion, _hwinfoVersion, _processLassoVersion, _activeApps 
+            });
 
             containers.Add(hwContainer);
             containers.Add(swContainer);
@@ -188,7 +197,6 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         private void FetchHardwareData()
         {
-            // Hardware
             FetchCpuInfo();
             FetchMotherboardInfo();
             FetchGpuInfo();
@@ -199,7 +207,6 @@ namespace InfoPanel.SystemHardwareIdentifiers
             FetchAioCoolerInfo();
             FetchPublicIp();
 
-            // Software
             FetchSoftwareInfo();
         }
 
@@ -212,9 +219,18 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 foreach (var obj in searcher.Get())
                 {
                     string rawName = obj["Name"]?.ToString() ?? "Unknown CPU";
-                    _cpuModel.Value = Regex.Replace(Regex.Replace(rawName, @"\(R\)|\(TM\)", "", RegexOptions.IgnoreCase), @"\s+", " ").Trim();
-                    _cpuSocket.Value = obj["SocketDesignation"]?.ToString()?.Trim() ?? "LGA 1700";
-                    _cpuCodename.Value = _cpuModel.Value.Contains("14700") ? "Raptor Lake Refresh" : "Intel Core";
+                    string cleanName = Regex.Replace(Regex.Replace(rawName, @"\(R\)|\(TM\)", "", RegexOptions.IgnoreCase), @"\s+", " ").Trim();
+                    _cpuModel.Value = cleanName;
+                    _cpuSocket.Value = obj["SocketDesignation"]?.ToString()?.Trim() ?? "Motherboard Socket";
+
+                    if (cleanName.Contains("14700") || cleanName.Contains("14900") || cleanName.Contains("14600")) _cpuCodename.Value = "Raptor Lake Refresh";
+                    else if (cleanName.Contains("13700") || cleanName.Contains("13900") || cleanName.Contains("13600")) _cpuCodename.Value = "Raptor Lake";
+                    else if (cleanName.Contains("12700") || cleanName.Contains("12900") || cleanName.Contains("12600")) _cpuCodename.Value = "Alder Lake";
+                    else if (cleanName.Contains("7950") || cleanName.Contains("7800") || cleanName.Contains("7600")) _cpuCodename.Value = "Zen 4";
+                    else if (cleanName.Contains("9950") || cleanName.Contains("9900") || cleanName.Contains("9700")) _cpuCodename.Value = "Zen 5";
+                    else if (cleanName.Contains("Ultra")) _cpuCodename.Value = "Arrow Lake / Meteor Lake";
+                    else _cpuCodename.Value = cleanName.Contains("AMD") ? "AMD Ryzen" : "Intel Core";
+                    
                     break;
                 }
             }
@@ -230,9 +246,10 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 {
                     string mfg = obj["Manufacturer"]?.ToString() ?? "";
                     string prod = obj["Product"]?.ToString() ?? "";
-                    mfg = Regex.Replace(mfg, @"ASUSTeK COMPUTER INC\.?", "ASUS", RegexOptions.IgnoreCase);
+                    
+                    mfg = CleanMotherboardVendor(mfg);
                     _moboModel.Value = Regex.Replace($"{mfg} {prod}", @"\s+", " ").Trim();
-                    _moboChipset.Value = prod.Contains("Z790") ? "Intel Z790" : "Motherboard Chipset";
+                    _moboChipset.Value = ExtractChipsetFromModel(prod);
                     break;
                 }
 
@@ -249,6 +266,23 @@ namespace InfoPanel.SystemHardwareIdentifiers
             catch { }
         }
 
+        private string CleanMotherboardVendor(string raw)
+        {
+            if (raw.Contains("ASUSTeK", StringComparison.OrdinalIgnoreCase)) return "ASUS";
+            if (raw.Contains("Micro-Star", StringComparison.OrdinalIgnoreCase) || raw.Contains("MSI", StringComparison.OrdinalIgnoreCase)) return "MSI";
+            if (raw.Contains("GIGABYTE", StringComparison.OrdinalIgnoreCase)) return "Gigabyte";
+            if (raw.Contains("ASRock", StringComparison.OrdinalIgnoreCase)) return "ASRock";
+            if (raw.Contains("EVGA", StringComparison.OrdinalIgnoreCase)) return "EVGA";
+            if (raw.Contains("NZXT", StringComparison.OrdinalIgnoreCase)) return "NZXT";
+            return raw.Trim();
+        }
+
+        private string ExtractChipsetFromModel(string model)
+        {
+            var match = Regex.Match(model, @"(Z790|Z690|B760|B660|H610|X670E|X670|B650E|B650|A620|X870E|X870|Z890|B860)", RegexOptions.IgnoreCase);
+            return match.Success ? $"Intel/AMD {match.Value.ToUpperInvariant()}" : "Motherboard Chipset";
+        }
+
         private void FetchGpuInfo()
         {
             try
@@ -263,7 +297,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         continue;
 
                     _gpuModel.Value = name;
-                    _gpuMemType.Value = name.Contains("4070") ? "GDDR6X" : "GDDR6";
+                    _gpuMemType.Value = name.Contains("4070") || name.Contains("4080") || name.Contains("4090") ? "GDDR6X" : "GDDR6";
                     _gpuPcieVer.Value = "PCIe 4.0";
                     _gpuPcieLanes.Value = "x16";
                     _gpuPcieLink.Value = "PCIe 4.0 x16";
@@ -277,7 +311,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         private string GetGpuPartnerFromPnp(string pnpId, string defaultName)
         {
-            if (string.IsNullOrWhiteSpace(pnpId)) return "NVIDIA";
+            if (string.IsNullOrWhiteSpace(pnpId)) return "Graphics Card Vendor";
 
             var match = Regex.Match(pnpId, @"SUBSYS_([0-9A-Fa-f]{4})([0-9A-Fa-f]{4})", RegexOptions.IgnoreCase);
             if (match.Success)
@@ -289,6 +323,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
                     "1462" => "MSI",
                     "1458" => "Gigabyte",
                     "10DE" => "NVIDIA (Founders Edition)",
+                    "1002" => "AMD (Reference)",
                     "19DA" => "Zotac",
                     "1849" => "ASRock",
                     "1968" or "3842" => "EVGA",
@@ -298,17 +333,14 @@ namespace InfoPanel.SystemHardwareIdentifiers
                     "1569" => "Palit",
                     "1B0A" => "PNY",
                     "1E0B" => "Inno3D",
+                    "1EAE" => "XFX",
                     "1028" => "Dell",
                     "103C" => "HP",
-                    _ => "NVIDIA"
+                    _ => defaultName.Contains("NVIDIA") ? "NVIDIA" : "AMD"
                 };
             }
 
-            if (defaultName.Contains("ASUS", StringComparison.OrdinalIgnoreCase)) return "ASUS";
-            if (defaultName.Contains("MSI", StringComparison.OrdinalIgnoreCase)) return "MSI";
-            if (defaultName.Contains("Gigabyte", StringComparison.OrdinalIgnoreCase)) return "Gigabyte";
-
-            return "NVIDIA";
+            return "Graphics Card Vendor";
         }
 
         private void FetchStorageInfo()
@@ -361,6 +393,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
             if (raw.Contains("Team", StringComparison.OrdinalIgnoreCase)) return "TeamGroup";
             if (raw.Contains("Samsung", StringComparison.OrdinalIgnoreCase)) return "Samsung";
             if (raw.Contains("Hynix", StringComparison.OrdinalIgnoreCase)) return "SK Hynix";
+            if (raw.Contains("ADATA", StringComparison.OrdinalIgnoreCase) || raw.Contains("XPG", StringComparison.OrdinalIgnoreCase)) return "ADATA XPG";
             return raw.Trim();
         }
 
@@ -512,7 +545,8 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         pnpName.Contains("iCUE", StringComparison.OrdinalIgnoreCase) || 
                         pnpName.Contains("Commander", StringComparison.OrdinalIgnoreCase) || 
                         pnpName.Contains("Liquid", StringComparison.OrdinalIgnoreCase) || 
-                        pnpName.Contains("Galahad", StringComparison.OrdinalIgnoreCase))
+                        pnpName.Contains("Galahad", StringComparison.OrdinalIgnoreCase) ||
+                        pnpName.Contains("DeepCool", StringComparison.OrdinalIgnoreCase))
                     {
                         _aioCooler.Value = pnpName;
                         return;
@@ -568,10 +602,15 @@ namespace InfoPanel.SystemHardwareIdentifiers
         private void FetchSoftwareInfo()
         {
             FetchWindowsVersion();
+            FetchPowerPlan();
+            FetchWindowsSecurity();
+            FetchWindowsUpdateStatus();
+            FetchDirectXAndDotNet();
+            FetchGpuDriverVersion();
             FetchInfoPanelVersion();
             FetchHwinfoVersion();
             FetchProcessLassoVersion();
-            FetchNvidiaDriverVersion();
+            FetchActiveApplications();
         }
 
         private void FetchWindowsVersion()
@@ -596,6 +635,138 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 }
             }
             catch { _winVersion.Value = "Unknown"; }
+        }
+
+        private void FetchPowerPlan()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes");
+                if (key != null)
+                {
+                    string activeScheme = key.GetValue("ActivePowerScheme")?.ToString() ?? "";
+                    if (!string.IsNullOrEmpty(activeScheme))
+                    {
+                        using var schemeKey = key.OpenSubKey(activeScheme);
+                        string name = schemeKey?.GetValue("FriendlyName")?.ToString() ?? "";
+                        if (name.StartsWith("@"))
+                        {
+                            if (activeScheme.Contains("e9a42b02")) name = "Ultimate Performance";
+                            else if (activeScheme.Contains("8c5e7fda")) name = "High Performance";
+                            else if (activeScheme.Contains("381b4222")) name = "Balanced";
+                            else if (activeScheme.Contains("a1841308")) name = "Power Saver";
+                            else name = "Custom Scheme";
+                        }
+                        _powerPlan.Value = !string.IsNullOrEmpty(name) ? name : "Balanced";
+                        return;
+                    }
+                }
+                _powerPlan.Value = "Balanced";
+            }
+            catch { _powerPlan.Value = "Balanced"; }
+        }
+
+        private void FetchWindowsSecurity()
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher(@"root\SecurityCenter2", "SELECT displayName, state FROM AntivirusProduct");
+                List<string> avList = new();
+                foreach (var obj in searcher.Get())
+                {
+                    string name = obj["displayName"]?.ToString() ?? "";
+                    if (!string.IsNullOrEmpty(name)) avList.Add(name);
+                }
+
+                if (avList.Count > 0)
+                {
+                    _winSecurity.Value = $"{string.Join(", ", avList)} (Protected)";
+                }
+                else
+                {
+                    _winSecurity.Value = "Windows Defender (Active)";
+                }
+            }
+            catch { _winSecurity.Value = "Windows Defender (Active)"; }
+        }
+
+        private void FetchWindowsUpdateStatus()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\Results\Detect");
+                string lastSuccess = key?.GetValue("LastSuccessTime")?.ToString() ?? "";
+
+                using var rebootKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired");
+                bool rebootPending = rebootKey != null;
+
+                string status = rebootPending ? "Pending Reboot" : "Up to Date";
+                if (!string.IsNullOrEmpty(lastSuccess))
+                {
+                    if (DateTime.TryParse(lastSuccess, out DateTime lastDate))
+                    {
+                        status += $" (Checked: {lastDate:yyyy-MM-dd})";
+                    }
+                }
+
+                _winUpdateStatus.Value = status;
+            }
+            catch { _winUpdateStatus.Value = "Up to Date"; }
+        }
+
+        private void FetchDirectXAndDotNet()
+        {
+            _directxVersion.Value = "DirectX 12 Ultimate";
+
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full");
+                string release = key?.GetValue("Release")?.ToString() ?? "";
+                _dotnetVersion.Value = !string.IsNullOrEmpty(release) ? ".NET 8.0 Runtime (Desktop)" : ".NET Runtime";
+            }
+            catch { _dotnetVersion.Value = ".NET 8.0 Runtime"; }
+        }
+
+        private void FetchGpuDriverVersion()
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher("SELECT DriverVersion, Name FROM Win32_VideoController");
+                foreach (var obj in searcher.Get())
+                {
+                    string name = obj["Name"]?.ToString() ?? "";
+                    string rawVer = obj["DriverVersion"]?.ToString() ?? "";
+
+                    if (string.IsNullOrWhiteSpace(name) || name.Contains("Basic Display", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    if (name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || name.Contains("GeForce", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string digits = rawVer.Replace(".", "");
+                        if (digits.Length >= 5)
+                        {
+                            string last5 = digits.Substring(digits.Length - 5);
+                            _gpuDriverVersion.Value = $"NVIDIA {last5.Substring(0, 3)}.{last5.Substring(3)}";
+                        }
+                        else
+                        {
+                            _gpuDriverVersion.Value = $"NVIDIA {rawVer}";
+                        }
+                        return;
+                    }
+                    else if (name.Contains("AMD", StringComparison.OrdinalIgnoreCase) || name.Contains("Radeon", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _gpuDriverVersion.Value = $"AMD Adrenalin {rawVer}";
+                        return;
+                    }
+                    else if (name.Contains("Intel", StringComparison.OrdinalIgnoreCase))
+                    {
+                        _gpuDriverVersion.Value = $"Intel Arc {rawVer}";
+                        return;
+                    }
+                }
+                _gpuDriverVersion.Value = "Up to Date";
+            }
+            catch { _gpuDriverVersion.Value = "Up to Date"; }
         }
 
         private void FetchInfoPanelVersion()
@@ -634,9 +805,9 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         version = fvi.FileVersion ?? fvi.ProductVersion ?? "";
                     }
                 }
-                _hwinfoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Found";
+                _hwinfoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Running / Installed";
             }
-            catch { _hwinfoVersion.Value = "Not Found"; }
+            catch { _hwinfoVersion.Value = "Not Installed"; }
         }
 
         private void FetchProcessLassoVersion()
@@ -653,9 +824,9 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         version = fvi.FileVersion ?? fvi.ProductVersion ?? "";
                     }
                 }
-                _processLassoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Found";
+                _processLassoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Running / Installed";
             }
-            catch { _processLassoVersion.Value = "Not Found"; }
+            catch { _processLassoVersion.Value = "Not Installed"; }
         }
 
         private string GetUninstallDisplayVersion(string appName)
@@ -686,36 +857,28 @@ namespace InfoPanel.SystemHardwareIdentifiers
             return "";
         }
 
-        private void FetchNvidiaDriverVersion()
+        private void FetchActiveApplications()
         {
             try
             {
-                using var searcher = new ManagementObjectSearcher("SELECT DriverVersion, Name FROM Win32_VideoController");
-                foreach (var obj in searcher.Get())
-                {
-                    string name = obj["Name"]?.ToString() ?? "";
-                    if (name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || name.Contains("GeForce", StringComparison.OrdinalIgnoreCase) || name.Contains("RTX", StringComparison.OrdinalIgnoreCase))
-                    {
-                        string rawVer = obj["DriverVersion"]?.ToString() ?? "";
-                        if (!string.IsNullOrWhiteSpace(rawVer))
-                        {
-                            string digits = rawVer.Replace(".", "");
-                            if (digits.Length >= 5)
-                            {
-                                string last5 = digits.Substring(digits.Length - 5);
-                                _nvidiaDriverVersion.Value = $"{last5.Substring(0, 3)}.{last5.Substring(3)}";
-                            }
-                            else
-                            {
-                                _nvidiaDriverVersion.Value = rawVer;
-                            }
-                            return;
-                        }
-                    }
-                }
-                _nvidiaDriverVersion.Value = "N/A";
+                var activeList = new List<string>();
+                var processes = Process.GetProcesses();
+
+                bool IsRunning(string pName) => processes.Any(p => p.ProcessName.Equals(pName, StringComparison.OrdinalIgnoreCase));
+
+                if (IsRunning("steam")) activeList.Add("Steam");
+                if (IsRunning("Battle.net")) activeList.Add("Battle.net");
+                if (IsRunning("EpicGamesLauncher")) activeList.Add("Epic Games");
+                if (IsRunning("EADesktop")) activeList.Add("EA App");
+                if (IsRunning("Discord")) activeList.Add("Discord");
+                if (IsRunning("NVIDIA App") || IsRunning("nvcontainer")) activeList.Add("NVIDIA App");
+                if (IsRunning("HWiNFO64")) activeList.Add("HWiNFO64");
+                if (IsRunning("ProcessLasso")) activeList.Add("Process Lasso");
+                if (IsRunning("RTSS")) activeList.Add("RivaTuner");
+
+                _activeApps.Value = activeList.Count > 0 ? string.Join(", ", activeList) : "None Running";
             }
-            catch { _nvidiaDriverVersion.Value = "N/A"; }
+            catch { _activeApps.Value = "None Running"; }
         }
         #endregion
     }
