@@ -1,11 +1,15 @@
 using InfoPanel.Plugins;
+using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net.Http;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -16,6 +20,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
 {
     public class HardwareIdentifiersPlugin : BasePlugin
     {
+        // --- HARDWARE IDENTIFIERS ---
         // Core Hardware
         private readonly PluginText _cpuModel = new("cpu_model", "CPU Model", "Detecting...");
         private readonly PluginText _cpuCodename = new("cpu_codename", "CPU Codename", "Detecting...");
@@ -54,6 +59,13 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         // Cooling
         private readonly PluginText _aioCooler = new("cooler_aio", "AIO Liquid Cooler", "Detecting...");
+
+        // --- SOFTWARE IDENTIFIERS ---
+        private readonly PluginText _winVersion = new("win_version", "Windows Version", "Detecting...");
+        private readonly PluginText _infoPanelVersion = new("infopanel_version", "InfoPanel Version", "Detecting...");
+        private readonly PluginText _hwinfoVersion = new("hwinfo_version", "HWiNFO Version", "Detecting...");
+        private readonly PluginText _processLassoVersion = new("process_lasso_version", "Process Lasso Version", "Detecting...");
+        private readonly PluginText _nvidiaDriverVersion = new("nvidia_driver_version", "NVIDIA Driver Version", "Detecting...");
 
         #region User32 Interop Structs
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -116,7 +128,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
         #endregion
 
         public HardwareIdentifiersPlugin() 
-            : base("system-hardware-identifiers", "System Hardware Identifiers", "Exposes detailed hardware identifiers for InfoPanel.")
+            : base("system-hardware-identifiers", "System Identifiers", "Exposes detailed system hardware and software identifiers.")
         {
         }
 
@@ -128,35 +140,41 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         public override void Load(List<IPluginContainer> containers)
         {
-            var container = new PluginContainer("sys_identifiers", "Hardware Identifiers");
+            // Container 1: Hardware Identifiers
+            var hwContainer = new PluginContainer("sys_hardware_identifiers", "Hardware Identifiers");
 
-            container.Entries.AddRange(new[] { _cpuModel, _cpuCodename, _cpuSocket });
-            container.Entries.AddRange(new[] { _moboModel, _moboChipset, _biosVersion, _biosDate });
-            container.Entries.AddRange(new[] { _gpuModel, _gpuPartner, _gpuMemType, _gpuPcieVer, _gpuPcieLanes, _gpuPcieLink });
+            hwContainer.Entries.AddRange(new[] { _cpuModel, _cpuCodename, _cpuSocket });
+            hwContainer.Entries.AddRange(new[] { _moboModel, _moboChipset, _biosVersion, _biosDate });
+            hwContainer.Entries.AddRange(new[] { _gpuModel, _gpuPartner, _gpuMemType, _gpuPcieVer, _gpuPcieLanes, _gpuPcieLink });
 
             for (int i = 0; i < 4; i++)
             {
-                container.Entries.Add(_ssdModels[i]);
-                container.Entries.Add(_ssdInterfaces[i]);
+                hwContainer.Entries.Add(_ssdModels[i]);
+                hwContainer.Entries.Add(_ssdInterfaces[i]);
             }
 
             for (int i = 0; i < 4; i++)
             {
-                container.Entries.Add(_ramBrands[i]);
-                container.Entries.Add(_ramDetails[i]);
+                hwContainer.Entries.Add(_ramBrands[i]);
+                hwContainer.Entries.Add(_ramDetails[i]);
             }
 
             for (int i = 0; i < 4; i++)
             {
-                container.Entries.Add(_monModels[i]);
-                container.Entries.Add(_monRes[i]);
-                container.Entries.Add(_monRefresh[i]);
+                hwContainer.Entries.Add(_monModels[i]);
+                hwContainer.Entries.Add(_monRes[i]);
+                hwContainer.Entries.Add(_monRefresh[i]);
             }
 
-            container.Entries.AddRange(new[] { _netAdapter, _netType, _localIp, _publicIp });
-            container.Entries.Add(_aioCooler);
+            hwContainer.Entries.AddRange(new[] { _netAdapter, _netType, _localIp, _publicIp });
+            hwContainer.Entries.Add(_aioCooler);
 
-            containers.Add(container);
+            // Container 2: Software Identifiers
+            var swContainer = new PluginContainer("sys_software_identifiers", "Software Identifiers");
+            swContainer.Entries.AddRange(new[] { _winVersion, _infoPanelVersion, _hwinfoVersion, _processLassoVersion, _nvidiaDriverVersion });
+
+            containers.Add(hwContainer);
+            containers.Add(swContainer);
         }
 
         public override Task UpdateAsync(CancellationToken cancellationToken)
@@ -170,6 +188,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
         private void FetchHardwareData()
         {
+            // Hardware
             FetchCpuInfo();
             FetchMotherboardInfo();
             FetchGpuInfo();
@@ -179,8 +198,12 @@ namespace InfoPanel.SystemHardwareIdentifiers
             FetchNetworkInfo();
             FetchAioCoolerInfo();
             FetchPublicIp();
+
+            // Software
+            FetchSoftwareInfo();
         }
 
+        #region Hardware Fetching
         private void FetchCpuInfo()
         {
             try
@@ -355,10 +378,8 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 {
                     devNum++;
 
-                    // Active desktop flag = 0x1
                     if ((adapter.StateFlags & 0x1) == 0) continue;
 
-                    // Resolution & Refresh Rate for THIS specific monitor
                     DEVMODE devMode = new DEVMODE { dmSize = (ushort)Marshal.SizeOf(typeof(DEVMODE)) };
                     if (EnumDisplaySettings(adapter.DeviceName, -1, ref devMode))
                     {
@@ -369,7 +390,6 @@ namespace InfoPanel.SystemHardwareIdentifiers
                         _monRefresh[activeSlot].Value = $"{devMode.dmDisplayFrequency} Hz";
                     }
 
-                    // Monitor hardware details connected to this display adapter
                     DISPLAY_DEVICE monDevice = new DISPLAY_DEVICE { cb = Marshal.SizeOf(typeof(DISPLAY_DEVICE)) };
                     if (EnumDisplayDevices(adapter.DeviceName, 0, ref monDevice, 0))
                     {
@@ -395,7 +415,6 @@ namespace InfoPanel.SystemHardwareIdentifiers
                     activeSlot++;
                 }
 
-                // Fill inactive slots
                 for (int i = activeSlot; i < 4; i++)
                 {
                     _monModels[i].Value = "Not Connected";
@@ -463,7 +482,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 "DEL" => "Dell",
                 "SAM" or "SEC" => "Samsung",
                 "LGD" or "GSM" => "LG",
-                "ASU" => "ASUS",
+                "ASU" or "AUS" => "ASUS",
                 "ACR" => "Acer",
                 "MSI" => "MSI",
                 "BEN" => "BenQ",
@@ -473,7 +492,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 "GIG" or "GB" => "Gigabyte",
                 "VSC" => "ViewSonic",
                 "ALI" => "Alienware",
-                "CRS" or "COR" => "Corsair",
+                "CRS" or "COR" or "CRX" => "Corsair",
                 _ => upper
             };
         }
@@ -543,5 +562,161 @@ namespace InfoPanel.SystemHardwareIdentifiers
                 _publicIp.Value = "Unavailable";
             }
         }
+        #endregion
+
+        #region Software Fetching
+        private void FetchSoftwareInfo()
+        {
+            FetchWindowsVersion();
+            FetchInfoPanelVersion();
+            FetchHwinfoVersion();
+            FetchProcessLassoVersion();
+            FetchNvidiaDriverVersion();
+        }
+
+        private void FetchWindowsVersion()
+        {
+            try
+            {
+                using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+                if (key != null)
+                {
+                    string productName = key.GetValue("ProductName")?.ToString() ?? "Windows";
+                    string displayVersion = key.GetValue("DisplayVersion")?.ToString() ?? key.GetValue("ReleaseId")?.ToString() ?? "";
+                    string currentBuild = key.GetValue("CurrentBuildNumber")?.ToString() ?? key.GetValue("CurrentBuild")?.ToString() ?? "";
+                    object? ubrObj = key.GetValue("UBR");
+                    string ubr = ubrObj != null ? $".{ubrObj}" : "";
+
+                    if (int.TryParse(currentBuild, out int buildNum) && buildNum >= 22000)
+                    {
+                        productName = productName.Replace("Windows 10", "Windows 11");
+                    }
+
+                    _winVersion.Value = $"{productName} {displayVersion} (Build {currentBuild}{ubr})".Trim();
+                }
+            }
+            catch { _winVersion.Value = "Unknown"; }
+        }
+
+        private void FetchInfoPanelVersion()
+        {
+            try
+            {
+                var entryAssembly = Assembly.GetEntryAssembly();
+                if (entryAssembly != null)
+                {
+                    _infoPanelVersion.Value = entryAssembly.GetName().Version?.ToString(3) ?? "Unknown";
+                }
+                else
+                {
+                    var mainModule = Process.GetCurrentProcess().MainModule;
+                    if (mainModule != null)
+                    {
+                        var fileVersion = FileVersionInfo.GetVersionInfo(mainModule.FileName);
+                        _infoPanelVersion.Value = fileVersion.FileVersion ?? fileVersion.ProductVersion ?? "Unknown";
+                    }
+                }
+            }
+            catch { _infoPanelVersion.Value = "Unknown"; }
+        }
+
+        private void FetchHwinfoVersion()
+        {
+            try
+            {
+                string version = GetUninstallDisplayVersion("HWiNFO");
+                if (string.IsNullOrEmpty(version))
+                {
+                    string path = @"C:\Program Files\HWiNFO64\HWiNFO64.exe";
+                    if (File.Exists(path))
+                    {
+                        var fvi = FileVersionInfo.GetVersionInfo(path);
+                        version = fvi.FileVersion ?? fvi.ProductVersion ?? "";
+                    }
+                }
+                _hwinfoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Found";
+            }
+            catch { _hwinfoVersion.Value = "Not Found"; }
+        }
+
+        private void FetchProcessLassoVersion()
+        {
+            try
+            {
+                string version = GetUninstallDisplayVersion("Process Lasso");
+                if (string.IsNullOrEmpty(version))
+                {
+                    string path = @"C:\Program Files\Process Lasso\ProcessLasso.exe";
+                    if (File.Exists(path))
+                    {
+                        var fvi = FileVersionInfo.GetVersionInfo(path);
+                        version = fvi.FileVersion ?? fvi.ProductVersion ?? "";
+                    }
+                }
+                _processLassoVersion.Value = !string.IsNullOrWhiteSpace(version) ? version : "Not Found";
+            }
+            catch { _processLassoVersion.Value = "Not Found"; }
+        }
+
+        private string GetUninstallDisplayVersion(string appName)
+        {
+            string[] registryKeys = {
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                @"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            };
+
+            foreach (var regKey in registryKeys)
+            {
+                using var baseKey = Registry.LocalMachine.OpenSubKey(regKey);
+                if (baseKey == null) continue;
+
+                foreach (var subkeyName in baseKey.GetSubKeyNames())
+                {
+                    using var subkey = baseKey.OpenSubKey(subkeyName);
+                    if (subkey == null) continue;
+
+                    string displayName = subkey.GetValue("DisplayName")?.ToString() ?? "";
+                    if (displayName.Contains(appName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string displayVer = subkey.GetValue("DisplayVersion")?.ToString() ?? "";
+                        if (!string.IsNullOrWhiteSpace(displayVer)) return displayVer;
+                    }
+                }
+            }
+            return "";
+        }
+
+        private void FetchNvidiaDriverVersion()
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher("SELECT DriverVersion, Name FROM Win32_VideoController");
+                foreach (var obj in searcher.Get())
+                {
+                    string name = obj["Name"]?.ToString() ?? "";
+                    if (name.Contains("NVIDIA", StringComparison.OrdinalIgnoreCase) || name.Contains("GeForce", StringComparison.OrdinalIgnoreCase) || name.Contains("RTX", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string rawVer = obj["DriverVersion"]?.ToString() ?? "";
+                        if (!string.IsNullOrWhiteSpace(rawVer))
+                        {
+                            string digits = rawVer.Replace(".", "");
+                            if (digits.Length >= 5)
+                            {
+                                string last5 = digits.Substring(digits.Length - 5);
+                                _nvidiaDriverVersion.Value = $"{last5.Substring(0, 3)}.{last5.Substring(3)}";
+                            }
+                            else
+                            {
+                                _nvidiaDriverVersion.Value = rawVer;
+                            }
+                            return;
+                        }
+                    }
+                }
+                _nvidiaDriverVersion.Value = "N/A";
+            }
+            catch { _nvidiaDriverVersion.Value = "N/A"; }
+        }
+        #endregion
     }
 }
