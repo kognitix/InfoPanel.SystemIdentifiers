@@ -23,6 +23,8 @@
   <ItemGroup>
     <Reference Include="InfoPanel.Plugins">
       <HintPath>lib\InfoPanel.Plugins.dll</HintPath>
+      <Private>False</Private>
+      <ExcludeAssets>runtime</ExcludeAssets>
     </Reference>
   </ItemGroup>
 
