@@ -67,6 +67,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
         {
         }
 
+        [Obsolete]
         public override string? ConfigFilePath => null;
         public override TimeSpan UpdateInterval => TimeSpan.FromSeconds(30);
 
@@ -398,21 +399,21 @@ namespace InfoPanel.SystemHardwareIdentifiers
 
             try
             {
-                using RegistryKey baseKey = Registry.LocalMachine.OpenSubKey(keyPath);
+                using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(keyPath);
                 if (baseKey != null)
                 {
                     foreach (string subkeyName in baseKey.GetSubKeyNames())
                     {
-                        using RegistryKey deviceKey = baseKey.OpenSubKey(subkeyName);
+                        using RegistryKey? deviceKey = baseKey.OpenSubKey(subkeyName);
                         if (deviceKey == null) continue;
 
-                        int state = Convert.ToInt32(deviceKey.GetValue("DeviceState", 0));
+                        int state = Convert.ToInt32(deviceKey.GetValue("DeviceState", 0) ?? 0);
                         if (state == 1) // Active default endpoint
                         {
-                            using RegistryKey propsKey = deviceKey.OpenSubKey("Properties");
+                            using RegistryKey? propsKey = deviceKey.OpenSubKey("Properties");
                             if (propsKey != null)
                             {
-                                string deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2")?.ToString();
+                                string? deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2")?.ToString();
                                 if (!string.IsNullOrEmpty(deviceName))
                                 {
                                     return deviceName;
