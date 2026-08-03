@@ -1,46 +1,29 @@
-name: Build InfoPanel Plugin
+<Project Sdk="Microsoft.NET.Sdk">
 
-on:
-  push:
-    branches: [ main, master ]
-  workflow_dispatch:
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>InfoPanel.SystemIdentifiers</AssemblyName>
+    <RootNamespace>InfoPanel.SystemIdentifiers</RootNamespace>
+    
+    <!-- InfoPanel Display Metadata -->
+    <Version>1.0.0</Version>
+    <Authors>kognitix</Authors>
+    <Company>kognitix</Company>
+    <Product>InfoPanel System Identifiers</Product>
+    <Description>Exposes detailed system hardware and software identifiers.</Description>
+    <RepositoryUrl>https://github.com/kognitix/InfoPanel.SystemIdentifiers</RepositoryUrl>
+  </PropertyGroup>
 
-jobs:
-  build:
-    runs-on: windows-latest
+  <ItemGroup>
+    <PackageReference Include="System.Management" Version="8.0.0" />
+  </ItemGroup>
 
-    steps:
-    - name: Checkout Code
-      uses: actions/checkout@v4
+  <ItemGroup>
+    <Reference Include="InfoPanel.Plugins">
+      <HintPath>lib\InfoPanel.Plugins.dll</HintPath>
+    </Reference>
+  </ItemGroup>
 
-    - name: Setup .NET 8
-      uses: actions/setup-dotnet@v4
-      with:
-        dotnet-version: '8.0.x'
-
-    - name: Build InfoPanel SDK
-      run: |
-        git clone https://github.com/habibrehmansg/infopanel.git ../infopanel_repo
-        dotnet build ../infopanel_repo/InfoPanel.Plugins/InfoPanel.Plugins.csproj -c Release -o ./lib
-
-    - name: Restore NuGet Packages
-      run: |
-        dotnet restore InfoPanel.SystemIdentifiers.csproj
-
-    - name: Build Plugin
-      run: |
-        dotnet publish InfoPanel.SystemIdentifiers.csproj -c Release -o ./staging/InfoPanel.SystemIdentifiers
-
-    - name: Include Plugin Metadata
-      run: |
-        Copy-Item -Path "PluginInfo.ini" -Destination "./staging/InfoPanel.SystemIdentifiers/"
-
-    - name: Package ZIP
-      run: |
-        Compress-Archive -Path "./staging/InfoPanel.SystemIdentifiers" -DestinationPath "InfoPanel.SystemIdentifiers.zip"
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: InfoPanel.SystemIdentifiers-ZIP
-        path: InfoPanel.SystemIdentifiers.zip
+</Project>
