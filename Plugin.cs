@@ -1,5 +1,4 @@
 using InfoPanel.Plugins;
-using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -53,15 +52,8 @@ namespace InfoPanel.SystemHardwareIdentifiers
         private readonly PluginText _localIp = new("local_ip", "Local IP Address", "Detecting...");
         private readonly PluginText _publicIp = new("public_ip", "Public IP Address", "Detecting...");
 
-        // Peripherals & Accessories
-        private readonly PluginText _keyboard = new("peripheral_keyboard", "Keyboard", "Detecting...");
-        private readonly PluginText _mouse = new("peripheral_mouse", "Mouse", "Detecting...");
-        private readonly PluginText _gamepad = new("peripheral_gamepad", "GamePad", "Detecting...");
-        private readonly PluginText _audioOut = new("peripheral_audio_out", "Audio Output (Active)", "Detecting...");
-        private readonly PluginText _audioIn = new("peripheral_audio_in", "Audio Input (Active)", "Detecting...");
-        private readonly PluginText _btHeadset = new("peripheral_bt_headset", "Bluetooth Headset", "Detecting...");
+        // Cooling
         private readonly PluginText _aioCooler = new("cooler_aio", "AIO Liquid Cooler", "Detecting...");
-        private readonly PluginText _ledController = new("led_controller", "LED Controller", "Detecting...");
 
         #region User32 Interop Structs
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
@@ -162,7 +154,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
             }
 
             container.Entries.AddRange(new[] { _netAdapter, _netType, _localIp, _publicIp });
-            container.Entries.AddRange(new[] { _keyboard, _mouse, _gamepad, _audioOut, _audioIn, _btHeadset, _aioCooler, _ledController });
+            container.Entries.Add(_aioCooler);
 
             containers.Add(container);
         }
@@ -185,8 +177,7 @@ namespace InfoPanel.SystemHardwareIdentifiers
             FetchRamInfo();
             FetchMonitorsInfo();
             FetchNetworkInfo();
-            FetchPeripheralsInfo();
-            FetchActiveAudioDevices();
+            FetchAioCoolerInfo();
             FetchPublicIp();
         }
 
@@ -371,7 +362,10 @@ namespace InfoPanel.SystemHardwareIdentifiers
                     DEVMODE devMode = new DEVMODE { dmSize = (ushort)Marshal.SizeOf(typeof(DEVMODE)) };
                     if (EnumDisplaySettings(adapter.DeviceName, -1, ref devMode))
                     {
-                        _monRes[activeSlot].Value = $"{devMode.dmPelsWidth}x{devMode.dmPelsHeight}";
+                        int width = Math.Max((int)devMode.dmPelsWidth, (int)devMode.dmPelsHeight);
+                        int height = Math.Min((int)devMode.dmPelsWidth, (int)devMode.dmPelsHeight);
+
+                        _monRes[activeSlot].Value = $"{width}x{height}";
                         _monRefresh[activeSlot].Value = $"{devMode.dmDisplayFrequency} Hz";
                     }
 
@@ -423,24 +417,34 @@ namespace InfoPanel.SystemHardwareIdentifiers
             var list = new List<WmiMonData>();
             try
             {
-                using var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT InstanceName, UserFriendlyName FROM WmiMonitorID");
+                using var searcher = new ManagementObjectSearcher(@"root\wmi", "SELECT InstanceName, ManufacturerName, UserFriendlyName FROM WmiMonitorID");
                 foreach (var obj in searcher.Get())
                 {
                     string inst = obj["InstanceName"]?.ToString() ?? "";
+                    var mfgArr = obj["ManufacturerName"] as ushort[];
                     var modelArr = obj["UserFriendlyName"] as ushort[];
 
+                    string mfgCode = mfgArr != null ? Encoding.ASCII.GetString(mfgArr.Select(c => (byte)c).ToArray()).Trim('\0', ' ') : "";
                     string modelName = modelArr != null ? Encoding.ASCII.GetString(modelArr.Select(c => (byte)c).ToArray()).Trim('\0', ' ') : "";
+
+                    string brand = CleanMonitorBrand(mfgCode);
+                    string fullModelName = modelName;
+
+                    if (!string.IsNullOrWhiteSpace(brand) && !modelName.StartsWith(brand, StringComparison.OrdinalIgnoreCase))
+                    {
+                        fullModelName = $"{brand} {modelName}";
+                    }
 
                     string snippet = "";
                     var parts = inst.Split('\\');
                     if (parts.Length > 1) snippet = parts[1];
 
-                    if (!string.IsNullOrWhiteSpace(modelName))
+                    if (!string.IsNullOrWhiteSpace(fullModelName))
                     {
                         list.Add(new WmiMonData
                         {
                             PnpIdSnippet = snippet,
-                            Model = modelName
+                            Model = fullModelName
                         });
                     }
                 }
@@ -449,158 +453,56 @@ namespace InfoPanel.SystemHardwareIdentifiers
             return list;
         }
 
-        private void FetchPeripheralsInfo()
+        private string CleanMonitorBrand(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return "";
+            string upper = code.ToUpperInvariant().Trim();
+
+            return upper switch
+            {
+                "DEL" => "Dell",
+                "SAM" or "SEC" => "Samsung",
+                "LGD" or "GSM" => "LG",
+                "ASU" => "ASUS",
+                "ACR" => "Acer",
+                "MSI" => "MSI",
+                "BEN" => "BenQ",
+                "AOC" => "AOC",
+                "SNY" => "Sony",
+                "HPQ" or "HPN" => "HP",
+                "GIG" or "GB" => "Gigabyte",
+                "VSC" => "ViewSonic",
+                "ALI" => "Alienware",
+                "CRS" or "COR" => "Corsair",
+                _ => upper
+            };
+        }
+
+        private void FetchAioCoolerInfo()
         {
             try
             {
-                using var searcher = new ManagementObjectSearcher("SELECT Name, Caption, PNPClass FROM Win32_PnPEntity WHERE Present = TRUE");
-                bool foundGamepad = false;
-                bool foundAio = false;
-                bool foundLed = false;
-                bool foundBtHeadset = false;
-
+                using var searcher = new ManagementObjectSearcher("SELECT Name, Caption FROM Win32_PnPEntity WHERE Present = TRUE");
                 foreach (var obj in searcher.Get())
                 {
                     string pnpName = (obj["Name"] ?? obj["Caption"])?.ToString() ?? "";
-                    string pnpClass = obj["PNPClass"]?.ToString() ?? "";
-
                     if (string.IsNullOrWhiteSpace(pnpName)) continue;
 
-                    // Keyboard
-                    if (pnpClass.Equals("Keyboard", StringComparison.OrdinalIgnoreCase) && 
-                        !pnpName.Contains("HID Keyboard Device", StringComparison.OrdinalIgnoreCase) && 
-                        !pnpName.Contains("Standard PS/2", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _keyboard.Value = pnpName;
-                    }
-
-                    // Mouse
-                    if (pnpClass.Equals("Mouse", StringComparison.OrdinalIgnoreCase) && 
-                        !pnpName.Contains("HID-compliant mouse", StringComparison.OrdinalIgnoreCase))
-                    {
-                        _mouse.Value = pnpName;
-                    }
-
-                    // Gamepad (strict filter excluding Host Controllers and Intel drivers)
-                    if (!foundGamepad)
-                    {
-                        bool isGamepadClass = pnpClass.Equals("XnaComposite", StringComparison.OrdinalIgnoreCase) || 
-                                              pnpClass.Equals("XboxPeripheral", StringComparison.OrdinalIgnoreCase);
-
-                        bool isGamepadName = pnpName.Contains("Xbox 360", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("Xbox One", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("Xbox Wireless", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("Raikiri", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("Gamepad", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("DualSense", StringComparison.OrdinalIgnoreCase) ||
-                                             pnpName.Contains("DualShock", StringComparison.OrdinalIgnoreCase);
-
-                        bool isHostController = pnpName.Contains("Host Controller", StringComparison.OrdinalIgnoreCase) ||
-                                                pnpName.Contains("Serial IO", StringComparison.OrdinalIgnoreCase) ||
-                                                pnpName.Contains("PCI", StringComparison.OrdinalIgnoreCase) ||
-                                                pnpName.Contains("Intel", StringComparison.OrdinalIgnoreCase) ||
-                                                pnpName.Contains("Root", StringComparison.OrdinalIgnoreCase) ||
-                                                pnpName.Contains("Virtual", StringComparison.OrdinalIgnoreCase);
-
-                        if ((isGamepadClass || isGamepadName) && !isHostController)
-                        {
-                            _gamepad.Value = pnpName;
-                            foundGamepad = true;
-                        }
-                    }
-
-                    // AIO Cooler
-                    if (!foundAio && (pnpName.Contains("RYUO", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("Kraken", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("iCUE", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("Commander", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("Liquid", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("Galahad", StringComparison.OrdinalIgnoreCase)))
+                    if (pnpName.Contains("RYUO", StringComparison.OrdinalIgnoreCase) || 
+                        pnpName.Contains("Kraken", StringComparison.OrdinalIgnoreCase) || 
+                        pnpName.Contains("iCUE", StringComparison.OrdinalIgnoreCase) || 
+                        pnpName.Contains("Commander", StringComparison.OrdinalIgnoreCase) || 
+                        pnpName.Contains("Liquid", StringComparison.OrdinalIgnoreCase) || 
+                        pnpName.Contains("Galahad", StringComparison.OrdinalIgnoreCase))
                     {
                         _aioCooler.Value = pnpName;
-                        foundAio = true;
-                    }
-
-                    // LED Controller
-                    if (!foundLed && (pnpName.Contains("AURA", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("Lighting", StringComparison.OrdinalIgnoreCase) || 
-                                      pnpName.Contains("LED Controller", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        _ledController.Value = pnpName;
-                        foundLed = true;
-                    }
-
-                    // Bluetooth Headset
-                    if (!foundBtHeadset && (pnpName.Contains("Bose", StringComparison.OrdinalIgnoreCase) || 
-                                            pnpName.Contains("QC45", StringComparison.OrdinalIgnoreCase) || 
-                                            pnpName.Contains("Headphones", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        if (!pnpName.Contains("Hands-Free AG", StringComparison.OrdinalIgnoreCase))
-                        {
-                            string cleanBt = Regex.Replace(pnpName, @"\s+(Avrcp Transport|Hands-Free AG|Hands-Free|Bluetooth Audio Device)", "", RegexOptions.IgnoreCase).Trim();
-                            _btHeadset.Value = cleanBt;
-                            foundBtHeadset = true;
-                        }
+                        return;
                     }
                 }
 
-                if (!foundGamepad) _gamepad.Value = "None Connected";
-                if (!foundAio) _aioCooler.Value = "Standard Air / Direct Motherboard";
-                if (!foundLed) _ledController.Value = "Standard Motherboard Header";
-                if (!foundBtHeadset) _btHeadset.Value = "Not Connected";
+                _aioCooler.Value = "Standard Air / Direct Motherboard";
             }
             catch { }
-        }
-
-        private void FetchActiveAudioDevices()
-        {
-            _audioOut.Value = GetRegistryAudioDevice(isCapture: false);
-            _audioIn.Value = GetRegistryAudioDevice(isCapture: true);
-        }
-
-        private string GetRegistryAudioDevice(bool isCapture)
-        {
-            string keyPath = isCapture
-                ? @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Capture"
-                : @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render";
-
-            try
-            {
-                using RegistryKey? baseKey = Registry.LocalMachine.OpenSubKey(keyPath);
-                if (baseKey != null)
-                {
-                    foreach (string subkeyName in baseKey.GetSubKeyNames())
-                    {
-                        using RegistryKey? deviceKey = baseKey.OpenSubKey(subkeyName);
-                        if (deviceKey == null) continue;
-
-                        int state = Convert.ToInt32(deviceKey.GetValue("DeviceState", 0) ?? 0);
-                        if (state == 1) // Active default endpoint
-                        {
-                            using RegistryKey? propsKey = deviceKey.OpenSubKey("Properties");
-                            if (propsKey != null)
-                            {
-                                // Priority 1: Interface Friendly Name (e.g. "Antlion Wireless Microphone")
-                                string? deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},14")?.ToString();
-                                
-                                // Priority 2: Device Description fallback
-                                if (string.IsNullOrWhiteSpace(deviceName))
-                                {
-                                    deviceName = propsKey.GetValue("{a45c254e-df1c-4efd-8020-67d146a850e0},2")?.ToString();
-                                }
-
-                                if (!string.IsNullOrEmpty(deviceName))
-                                {
-                                    return deviceName;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
-
-            return "N/A";
         }
 
         private void FetchNetworkInfo()
