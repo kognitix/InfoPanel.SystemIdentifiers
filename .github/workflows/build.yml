@@ -35,12 +35,8 @@ jobs:
       run: |
         Copy-Item -Path "PluginInfo.ini" -Destination "./staging/InfoPanel.SystemIdentifiers/"
 
-    - name: Package ZIP
-      run: |
-        Compress-Archive -Path "./staging/InfoPanel.SystemIdentifiers" -DestinationPath "InfoPanel.SystemIdentifiers.zip"
-
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: InfoPanel.SystemIdentifiers-ZIP
-        path: InfoPanel.SystemIdentifiers.zip
+        name: InfoPanel.SystemIdentifiers
+        path: ./staging/InfoPanel.SystemIdentifiers/
