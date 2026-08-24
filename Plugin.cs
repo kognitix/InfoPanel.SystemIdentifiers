@@ -140,7 +140,7 @@ namespace InfoPanel.SystemIdentifiers
 
         [Obsolete]
         public override string? ConfigFilePath => null;
-        public override TimeSpan UpdateInterval => TimeSpan.FromSeconds(30);
+        public override TimeSpan UpdateInterval => TimeSpan.FromSeconds(1);
 
         public override void Initialize() => FetchHardwareData();
 
@@ -189,7 +189,9 @@ namespace InfoPanel.SystemIdentifiers
 
         public override Task UpdateAsync(CancellationToken cancellationToken)
         {
-            FetchHardwareData();
+            // Fast 1-second ticks: only update real-time metrics
+            FetchSystemUptime();
+            FetchActiveApplications();
             return Task.CompletedTask;
         }
 
@@ -620,7 +622,9 @@ namespace InfoPanel.SystemIdentifiers
             try
             {
                 var uptime = TimeSpan.FromMilliseconds(Environment.TickCount64);
-                _systemUptime.Value = $"{(int)uptime.TotalDays}d {uptime.Hours:D2}h {uptime.Minutes:D2}m";
+
+                //Format: "1d: 5:52:33" or "23d 11:05:09" (no leading zero on hours)
+                _systemUptime.Value = $"{(int)uptime.TotalDays}d {uptime.Hours}:{uptime.Minutes:D2}:{uptime.Seconds:D2}";
             }
             catch
             {
