@@ -60,6 +60,7 @@ namespace InfoPanel.SystemIdentifiers
         private readonly PluginText _aioCooler = new("cooler_aio", "AIO Liquid Cooler", "Detecting...");
 
         // --- SOFTWARE IDENTIFIERS ---
+        private readonly PluginText _systemUptime = new("system_uptime", "System Uptime", "Detecting...");
         private readonly PluginText _winVersion = new("win_version", "Windows Version", "Detecting...");
         private readonly PluginText _powerPlan = new("power_plan", "Power Plan", "Detecting...");
         private readonly PluginText _winSecurity = new("win_security", "Windows Security", "Detecting...");
@@ -177,7 +178,7 @@ namespace InfoPanel.SystemIdentifiers
             // Container 2: Software Identifiers
             var swContainer = new PluginContainer("sys_software_identifiers", "Software Identifiers");
             swContainer.Entries.AddRange(new[] { 
-                _winVersion, _powerPlan, _winSecurity, _winUpdateStatus, 
+                _systemUptime, _winVersion, _powerPlan, _winSecurity, _winUpdateStatus, 
                 _directxVersion, _dotnetVersion, _gpuDriverVersion, 
                 _infoPanelVersion, _hwinfoVersion, _processLassoVersion, _activeApps 
             });
@@ -601,6 +602,7 @@ namespace InfoPanel.SystemIdentifiers
         #region Software Fetching
         private void FetchSoftwareInfo()
         {
+            FetchSystemUptime();
             FetchWindowsVersion();
             FetchPowerPlan();
             FetchWindowsSecurity();
@@ -611,6 +613,19 @@ namespace InfoPanel.SystemIdentifiers
             FetchHwinfoVersion();
             FetchProcessLassoVersion();
             FetchActiveApplications();
+        }
+
+        private void FetchSystemUptime()
+        {
+            try
+            {
+                var uptime = TimeSpan.FromMilliseconds(Environment.TickCount64);
+                _systemUptime.Value = $"{(int)uptime.TotalDays}d {uptime.Hours:D2}h {uptime.Minutes:D2}m";
+            }
+            catch
+            {
+                _systemUptime.Value = "Unavailable";
+            }
         }
 
         private void FetchWindowsVersion()
