@@ -14,6 +14,7 @@ An extension for [InfoPanel](https://github.com/habibrehmansg/infopanel) that ex
 * **Network & Cooling:** Adapter Name, Network Type, Local/Public IP, AIO Liquid Cooler detection
 
 ### Software
+* __NEW__ **Uptime:** System Uptime Sensor
 * **OS:** Windows Version & Build Number
 * **System:** Power Plan, Windows Security Status, Windows Update Status
 * **Runtimes & Drivers:** DirectX Version, .NET Runtime, GPU Driver Version
